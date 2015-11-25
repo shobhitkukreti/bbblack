@@ -19,7 +19,8 @@ MODULE_DESCRIPTION("ARCH TIMER");
 struct dmtimer {
 //struct platform_device pdev;
 //struct cdev cdev;
-void __iomem * base_addr;
+void __iomem * enable_base_addr;
+void __iomem *timer7_base;
 u32 addr_len;
 u32 start,end;
 
@@ -77,16 +78,27 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	pr_emerg( "Start: %x END:%x , len:%x \n", (u32)r_mem->start, (u32)r_mem->end, \
 	(u32)r_mem->end-r_mem->start +1);	
 
-	if((request_mem_region(0x44E00000, 0x400 , DEVICE_NAME)) == NULL) {
+	if((request_mem_region(0x44E00000, 0x400 , "CM_PERIPHERAL")) == NULL) {
+		printk(KERN_ERR "CM PER Memory region already occupied\n");
+		return -EBUSY;
+	}
+	else 
+		printk(KERN_ALERT "CM PER Memory Region available\n");
+
+	if((request_mem_region(0x4804A000, 0x400 , DEVICE_NAME)) == NULL) {
 		printk(KERN_ERR "DMTIMER Memory region already occupied\n");
 		return -EBUSY;
 	}
 	else 
 		printk(KERN_ALERT "DMIMER Memory Region available\n");
 
+
 	io = ioremap_nocache(0x44E00000, 0x400);
-	pr_emerg("VMEM %x\n", io);
-	dmtimer_drv.base_addr=io;
+	dmtimer_drv.timer7_base = ioremap_nocache(0x4804A000, 0x400);
+	pr_emerg("VMEM 1 : %x\n", dmtimer_drv.timer7_base);
+	pr_emerg("VMEM 2 : %x\n", io);
+
+	dmtimer_drv.enable_base_addr=io;
 	iowrite32(30002, (io + 0x7c));
 
 	if(!io) {
@@ -94,8 +106,10 @@ static int dmtimer_probe(struct platform_device *pdev) {
 		return -1;
 	}
 	else 		
-		pr_alert("DMTIMER Remapped REG %x\n", ioread32(io + 0x7c));
-
+		pr_emerg("CM_PER REF %x\n", ioread32(io + 0x7c));
+	
+	pr_alert("Reading timer 7 counter reg \n");
+	pr_emerg("Timer 7 Counter Reg : %x", ioread32(dmtimer_drv.timer7_base));
 		
 
 	return 0;
@@ -107,9 +121,11 @@ static int dmtimer_remove (struct platform_device *pdev) {
 
 
 printk(KERN_INFO "Removed DMTIMER");
-iounmap(dmtimer_drv.base_addr);
+iounmap(dmtimer_drv.enable_base_addr);
+iounmap(dmtimer_drv.timer7_base);
 release_mem_region(0x44E00000, 0x400);
-pr_alert("Base Addr Release %x\n", dmtimer_drv.base_addr);
+release_mem_region(0x4804A000, 0x400);
+pr_alert("Base Addr Release %x\n", dmtimer_drv.timer7_base);
 
 return 0;
 }
