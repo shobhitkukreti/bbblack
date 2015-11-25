@@ -19,10 +19,11 @@ MODULE_DESCRIPTION("ARCH TIMER");
 struct dmtimer {
 //struct platform_device pdev;
 //struct cdev cdev;
-unsigned long *base_addr;
-unsigned int addr_len;
+void __iomem * base_addr;
+u32 addr_len;
+u32 start,end;
 
-} *dmtimer_drv;
+} dmtimer_drv;
 
 #endif
 
@@ -59,37 +60,56 @@ platform_driver_unregister(&dmtimer);
 
 static int dmtimer_probe(struct platform_device *pdev) {
 
-unsigned long base_addr;
-printk(KERN_ALERT "DMTIMER Probe\n");
+	unsigned long base_addr;
+	struct resource *r_mem;
+	void __iomem * io = NULL;
+	struct device *dev = &pdev->dev;
 
+	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 
-base_addr = 0x4804a000;
-dmtimer_drv->addr_len = (unsigned int) 0x400;
+	if(!r_mem) {
+		printk(KERN_ALERT "Cannot find DMTIMER Base address\n");
+		return -1;
+	}
+	dmtimer_drv.start = 0x44E00000;
+	dmtimer_drv.end =   0X44E003FF;
 
-#if 0
+	pr_emerg( "Start: %x END:%x , len:%x \n", (u32)r_mem->start, (u32)r_mem->end, \
+	(u32)r_mem->end-r_mem->start +1);	
 
-if((request_mem_region(base_addr, dmtimer_drv->addr_len, DEVICE_NAME)) == NULL) {
-	printk(KERN_ALERT "DMTIMER Memory region already occupied\n");
-	return -EBUSY;
+	if((request_mem_region(0x44E00000, 0x400 , DEVICE_NAME)) == NULL) {
+		printk(KERN_ERR "DMTIMER Memory region already occupied\n");
+		return -EBUSY;
+	}
+	else 
+		printk(KERN_ALERT "DMIMER Memory Region available\n");
+
+	io = ioremap_nocache(0x44E00000, 0x400);
+	pr_emerg("VMEM %x\n", io);
+	dmtimer_drv.base_addr=io;
+	iowrite32(30002, (io + 0x7c));
+
+	if(!io) {
+		pr_emerg("IOREMAP Failed \n");
+		return -1;
+	}
+	else 		
+		pr_alert("DMTIMER Remapped REG %x\n", ioread32(io + 0x7c));
+
+		
+
+	return 0;
 }
-else 
-	printk(KERN_ALERT "DMIMER 7 Unused\n");
-#endif
 
-dmtimer_drv->base_addr = (unsigned long *) ioremap(base_addr, 0x400);
-printk(KERN_INFO "DMTIMER Remapped REG %lu\n", (unsigned long *)dmtimer_drv->base_addr);
 
-printk(KERN_INFO "Reading REG TIDR %u\n", ioread32(dmtimer_drv->base_addr));
-
-return 0;
-}
-
+/* DMTIMER Remove Function */
 static int dmtimer_remove (struct platform_device *pdev) {
 
 
 printk(KERN_INFO "Removed DMTIMER");
-iounmap((unsigned int *)dmtimer_drv->base_addr);
-release_mem_region(0x4804a000, 0x400);
+iounmap(dmtimer_drv.base_addr);
+release_mem_region(0x44E00000, 0x400);
+pr_alert("Base Addr Release %x\n", dmtimer_drv.base_addr);
 
 return 0;
 }
