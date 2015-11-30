@@ -10,6 +10,7 @@
 #include <linux/delay.h>
 #include <linux/kthread.h>
 #include <linux/interrupt.h>
+#include <linux/of_irq.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DeathFire");
@@ -25,6 +26,7 @@ struct dmtimer {
 struct platform_device *pdev;
 void __iomem * enable_base_addr;
 void __iomem *timer7_base;
+unsigned int virq;
 u32 addr_len;
 u32 start,end;
 u8 flag;
@@ -70,7 +72,7 @@ static void __exit dmtimer_exit(void) {
 
 if(dmtimer_drv.my_thread) 
 	kthread_stop(dmtimer_drv.my_thread);
-	free_irq(95, NULL);
+	free_irq(dmtimer_drv.virq, NULL);
 platform_driver_unregister(&dmtimer);
 }
 
@@ -81,6 +83,13 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	int ret=0;
 
 	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	ret = irq_of_parse_and_map(pdev->dev.of_node,0);
+	if(!ret) {
+		return -1;
+	}
+		
+	dmtimer_drv.virq = ret;
+	pr_emerg("IRQ NUMBER: %u\n", dmtimer_drv.virq);
 
 	if(!r_mem) {
 		printk(KERN_ALERT "Cannot find DMTIMER Base address\n");
@@ -114,14 +123,15 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	pr_alert("VMEM 1 : %x\n", (unsigned int)dmtimer_drv.timer7_base);
 	pr_alert("VMEM 2 : %x\n", (unsigned int)io);
 	#endif
-	ret = request_irq(TINT7, (irq_handler_t)dmtimer_irq_handler,__IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
+	
+	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,__IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
 
 	dmtimer_drv.enable_base_addr=io;
 
 	iowrite32(30002, (io + 0x7c)); //enable timer 7 block
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
-	iowrite32(0x0FFF0000, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
-	iowrite32(0x0FFF0000, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
+	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
+	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
 	iowrite32(0x03, dmtimer_drv.timer7_base + 0x38); // auto reload mode, enable timer 7
 	
 	//pr_alert("CM_PER REF %x\n", ioread32(dmtimer_drv.enable_base_addr + 0x7c));
@@ -142,6 +152,8 @@ static int dmtimer_remove (struct platform_device *pdev) {
 
 
 printk(KERN_INFO "Removed DMTIMER");
+iowrite32(0x0, dmtimer_drv.timer7_base + 0x7c);
+iowrite32(0x00, dmtimer_drv.timer7_base + 0x2c);
 iounmap(dmtimer_drv.enable_base_addr);
 iounmap(dmtimer_drv.timer7_base);
 release_mem_region(0x44E00000, 0x400);
@@ -155,7 +167,7 @@ return 0;
 /* DMTIMER_IRQ_HANDLER */
 
 static int dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
-iowrite32(0x00, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
+iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 
 //iowrite32(0x00, dmtimer_drv.timer7_base + 0x38); // disable timer 7
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
