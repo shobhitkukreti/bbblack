@@ -18,8 +18,13 @@ MODULE_DESCRIPTION("ARCH TIMER");
 
 #define DEVICE_NAME "ARM DMTIMER"
 #define TINT7 95
+#define CM_PERS_REGBASE 0x44E00000
+#define CM_PERS_REGLEN 0x400
+#define DMTIMER7_REGBASE 0x4804A000
+#define DMTIMER7_REGLEN 0x400
+
 #define DEBUG 0
-#if 1
+
 
 struct dmtimer {
 
@@ -27,13 +32,9 @@ struct platform_device *pdev;
 void __iomem * enable_base_addr;
 void __iomem *timer7_base;
 unsigned int virq;
-u32 addr_len;
-u32 start,end;
-u8 flag;
 struct task_struct * my_thread;
 } dmtimer_drv;
 
-#endif
 
 static int dmtimer_probe (struct platform_device *);
 static int dmtimer_remove (struct platform_device *); 
@@ -79,69 +80,66 @@ platform_driver_unregister(&dmtimer);
 static int dmtimer_probe(struct platform_device *pdev) {
 
 	struct resource *r_mem;
-	void __iomem * io = NULL;
 	int ret=0;
 
+	/* Get Memory Resource as definied in DTS file for Timer7 */
 	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	ret = irq_of_parse_and_map(pdev->dev.of_node,0);
-	if(!ret) {
+	dmtimer_drv.virq = irq_of_parse_and_map(pdev->dev.of_node,0);
+	if(!dmtimer_drv.virq) {
 		return -1;
 	}
 		
-	dmtimer_drv.virq = ret;
-	pr_emerg("IRQ NUMBER: %u\n", dmtimer_drv.virq);
+
+	#ifdef DEBUG
+	pr_info("IRQ NUMBER: %u\n", dmtimer_drv.virq);
+	#endif
 
 	if(!r_mem) {
 		printk(KERN_ALERT "Cannot find DMTIMER Base address\n");
 		return -1;
 	}
-	dmtimer_drv.start = 0x44E00000; // Required fpr CM_PER TIMER 7 enable
-	dmtimer_drv.end =   0X44E003FF;
 
-	pr_emerg( "Start: %x END:%x , len:%x \n", (u32)r_mem->start, (u32)r_mem->end, \
+	#ifdef DEBUG
+	pr_info( "Start: %x END:%x , len:%x \n", (u32)r_mem->start, (u32)r_mem->end, \
 	(u32)r_mem->end-r_mem->start +1);	
+	#endif
 
-	if((request_mem_region(0x44E00000, 0x400 , "CM_PERIPHERAL")) == NULL) {
+	
+	/* Confirm if IO Memory is available before remapping to virtual space*/
+
+	if((request_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN , "CM_PERIPHERAL")) == NULL) {
 		printk(KERN_ERR "CM PER Memory region already occupied\n");
 		return -EBUSY;
 	}
-	else 
-		printk(KERN_ALERT "CM PER Memory Region available\n");
 
-	if((request_mem_region(0x4804A000, 0x400 , DEVICE_NAME)) == NULL) {
+	if((request_mem_region(r_mem->start, r_mem->end - r_mem->start + 1 , DEVICE_NAME)) == NULL) {
 		printk(KERN_ERR "DMTIMER Memory region already occupied\n");
 		return -EBUSY;
 	}
-	else 
-		printk(KERN_ALERT "DMIMER Memory Region available\n");
 
 
-	io = ioremap_nocache(0x44E00000, 0x400);
-	dmtimer_drv.timer7_base = ioremap_nocache(0x4804A000, 0x400);
+	/* Physical IO MEM to Virtual IO MEM. Usually an offset */
+	dmtimer_drv.enable_base_addr = ioremap_nocache(CM_PERS_REGBASE, CM_PERS_REGLEN);
+	dmtimer_drv.timer7_base = ioremap_nocache(DMTIMER7_REGBASE, DMTIMER7_REGLEN);
 	
 	#ifdef DEBUG
-	pr_alert("VMEM 1 : %x\n", (unsigned int)dmtimer_drv.timer7_base);
-	pr_alert("VMEM 2 : %x\n", (unsigned int)io);
+	pr_info("VMEM 1 : %x\n", (unsigned int)dmtimer_drv.timer7_base);
+	pr_info("VMEM 2 : %x\n", (unsigned int)dmtimer_drv.enable_base_addr);
 	#endif
 	
-	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,__IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
+	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
 
-	dmtimer_drv.enable_base_addr=io;
-
-	iowrite32(30002, (io + 0x7c)); //enable timer 7 block
+	
+	iowrite32(30002, (dmtimer_drv.enable_base_addr + 0x7c)); //enable timer 7 block
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
 	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
 	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
 	iowrite32(0x03, dmtimer_drv.timer7_base + 0x38); // auto reload mode, enable timer 7
 	
-	//pr_alert("CM_PER REF %x\n", ioread32(dmtimer_drv.enable_base_addr + 0x7c));
 
 	dmtimer_drv.pdev = pdev;
 	
-	#if 1 
 	dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
-	dmtimer_drv.flag=1;
-	#endif
 
 	return 0;
 }
@@ -156,9 +154,10 @@ iowrite32(0x0, dmtimer_drv.timer7_base + 0x7c);
 iowrite32(0x00, dmtimer_drv.timer7_base + 0x2c);
 iounmap(dmtimer_drv.enable_base_addr);
 iounmap(dmtimer_drv.timer7_base);
-release_mem_region(0x44E00000, 0x400);
-release_mem_region(0x4804A000, 0x400);
-pr_alert("T7 Addr Release %x\n", (unsigned int)dmtimer_drv.timer7_base);
+release_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN);
+release_mem_region(DMTIMER7_REGBASE, DMTIMER7_REGLEN);
+
+pr_info("DMTIMER 7 Addr Release %x\n", (unsigned int)dmtimer_drv.timer7_base);
 
 return 0;
 }
@@ -167,15 +166,14 @@ return 0;
 /* DMTIMER_IRQ_HANDLER */
 
 static int dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
-iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 
-//iowrite32(0x00, dmtimer_drv.timer7_base + 0x38); // disable timer 7
+iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
-//pr_emerg("Timer 7 OVF INT\n");
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
-//iowrite32(0x02, dmtimer_drv.timer7_base + 0x38); // enable timer 7 auto reload mode
 return (irq_handler_t) IRQ_HANDLED;
+
 }
+
 
 
 /* Kernel Thread Function Implementation to Read Timer value */
@@ -183,7 +181,7 @@ return (irq_handler_t) IRQ_HANDLED;
 static int read_timer (void * data) {
 
 
-	while(dmtimer_drv.enable_base_addr && dmtimer_drv.timer7_base && dmtimer_drv.flag) {
+	while(dmtimer_drv.enable_base_addr && dmtimer_drv.timer7_base) {
 	if(kthread_should_stop()) 
 		break;
 	
@@ -193,7 +191,6 @@ static int read_timer (void * data) {
 	pr_alert("TINT7-CLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));
 	pr_alert("TLDR:%x\n", ioread32(dmtimer_drv.timer7_base +0x40));
 	pr_alert("TINT STAT:%x\n", ioread32(dmtimer_drv.timer7_base +0x28));
-//	pr_alert("TIRQ_EN_SET:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));	
 	
 	msleep(1000);
 	}
