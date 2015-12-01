@@ -14,7 +14,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DeathFire");
-MODULE_DESCRIPTION("ARCH TIMER");
+MODULE_DESCRIPTION("DMTIMER Driver");
 
 #define DEVICE_NAME "ARM DMTIMER"
 #define TINT7 95
@@ -26,6 +26,7 @@ MODULE_DESCRIPTION("ARCH TIMER");
 #define DEBUG 0
 
 
+/* Struct Definition */
 struct dmtimer {
 
 struct platform_device *pdev;
@@ -36,6 +37,7 @@ struct task_struct * my_thread;
 } dmtimer_drv;
 
 
+/* Driver specific functions */
 static int dmtimer_probe (struct platform_device *);
 static int dmtimer_remove (struct platform_device *); 
 static int dmtimer_irq_handler (unsigned int irq, void * dev_id, struct pt_regs *reg);
@@ -46,6 +48,7 @@ static int read_timer (void * data);
 
 
 
+/* compatible string much match with dts file src code */
 static const struct of_device_id dmtimer_match[]={
 	{.compatible = "sk,timer-dev", },
 	{},
@@ -62,20 +65,31 @@ static struct platform_driver dmtimer = {
 		},
 };
 
+
+/* Module Init functions 
+ * Registers the platform driver
+ */
+
 static int __init dmtimer_init(void) {
 
-int ret=0;
-ret=platform_driver_register(&dmtimer);
-return ret;
+	int ret=0;
+	ret=platform_driver_register(&dmtimer);
+	return ret;
 }
 
+
+/* Module cleanup function */
 static void __exit dmtimer_exit(void) {
 
-if(dmtimer_drv.my_thread) 
-	kthread_stop(dmtimer_drv.my_thread);
+	if(dmtimer_drv.my_thread) 
+		kthread_stop(dmtimer_drv.my_thread);
 	free_irq(dmtimer_drv.virq, NULL);
-platform_driver_unregister(&dmtimer);
+	platform_driver_unregister(&dmtimer);
 }
+
+
+
+/* Probe functions, remaps io memory, sets up timer and irq handler */
 
 static int dmtimer_probe(struct platform_device *pdev) {
 
@@ -138,9 +152,11 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	
 
 	dmtimer_drv.pdev = pdev;
-	
-	//dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
 
+	/* Optional kthread to read reg status */
+	#if 0
+	dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
+	#endif
 	return 0;
 }
 
@@ -149,17 +165,17 @@ static int dmtimer_probe(struct platform_device *pdev) {
 static int dmtimer_remove (struct platform_device *pdev) {
 
 
-printk(KERN_INFO "Removed DMTIMER");
-iowrite32(0x0, dmtimer_drv.timer7_base + 0x7c);
-iowrite32(0x00, dmtimer_drv.timer7_base + 0x2c);
-iounmap(dmtimer_drv.enable_base_addr);
-iounmap(dmtimer_drv.timer7_base);
-release_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN);
-release_mem_region(DMTIMER7_REGBASE, DMTIMER7_REGLEN);
+	printk(KERN_INFO "Removed DMTIMER");
+	iowrite32(0x0, dmtimer_drv.timer7_base + 0x7c);
+	iowrite32(0x00, dmtimer_drv.timer7_base + 0x2c);
+	iounmap(dmtimer_drv.enable_base_addr);
+	iounmap(dmtimer_drv.timer7_base);
+	release_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN);
+	release_mem_region(DMTIMER7_REGBASE, DMTIMER7_REGLEN);
 
-pr_info("DMTIMER 7 Addr Release %x\n", (unsigned int)dmtimer_drv.timer7_base);
+	pr_info("DMTIMER 7 Addr Release %x\n", (unsigned int)dmtimer_drv.timer7_base);
 
-return 0;
+	return 0;
 }
 
 
@@ -167,11 +183,14 @@ return 0;
 
 static int dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
 
-iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
-iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
-iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
-pr_info("T7 - 1sec  \n");
-return (irq_handler_t) IRQ_HANDLED;
+	iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
+	iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
+	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
+
+	/* Really bad idea to print in IRQ Handler, but this just a demo */
+	pr_info("T7 - 1sec  \n");
+
+	return (irq_handler_t) IRQ_HANDLED;
 
 }
 
@@ -183,20 +202,20 @@ static int read_timer (void * data) {
 
 
 	while(dmtimer_drv.enable_base_addr && dmtimer_drv.timer7_base) {
-	if(kthread_should_stop()) 
-		break;
-	
-	pr_alert("TCLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x38));
-	pr_alert("TCRR:%x\n", ioread32(dmtimer_drv.timer7_base +0x3C));
-	pr_alert("TINT7-EN:%x\n", ioread32(dmtimer_drv.timer7_base +0x2c));
-	pr_alert("TINT7-CLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));
-	pr_alert("TLDR:%x\n", ioread32(dmtimer_drv.timer7_base +0x40));
-	pr_alert("TINT STAT:%x\n", ioread32(dmtimer_drv.timer7_base +0x28));
-	
-	msleep(1000);
+		if(kthread_should_stop()) 
+			break;
+
+		pr_alert("TCLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x38));
+		pr_alert("TCRR:%x\n", ioread32(dmtimer_drv.timer7_base +0x3C));
+		pr_alert("TINT7-EN:%x\n", ioread32(dmtimer_drv.timer7_base +0x2c));
+		pr_alert("TINT7-CLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));
+		pr_alert("TLDR:%x\n", ioread32(dmtimer_drv.timer7_base +0x40));
+		pr_alert("TINT STAT:%x\n", ioread32(dmtimer_drv.timer7_base +0x28));
+
+		msleep(1000);
 	}
 
-return 0;
+	return 0;
 }
 
 
