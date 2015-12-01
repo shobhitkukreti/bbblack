@@ -132,14 +132,14 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	
 	iowrite32(30002, (dmtimer_drv.enable_base_addr + 0x7c)); //enable timer 7 block
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
-	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
-	iowrite32(0xE2329AFF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
+	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
+	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
 	iowrite32(0x03, dmtimer_drv.timer7_base + 0x38); // auto reload mode, enable timer 7
 	
 
 	dmtimer_drv.pdev = pdev;
 	
-	dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
+	//dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
 
 	return 0;
 }
@@ -170,6 +170,7 @@ static int dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
 iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
+pr_info("T7 - 1sec  \n");
 return (irq_handler_t) IRQ_HANDLED;
 
 }
