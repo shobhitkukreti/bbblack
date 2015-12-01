@@ -1,0 +1,3 @@
+[submodule "bb-kernel"]
+	path = bb-kernel
+	url = https://github.com/RobertCNelson/bb-kernel.git
