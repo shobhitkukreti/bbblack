@@ -1,6 +1,0 @@
-[submodule "bb-kernel"]
-	path = bb-kernel
-	url = https://github.com/RobertCNelson/bb-kernel.git
-[submodule "u-boot"]
-	path = u-boot
-	url = git://git.denx.de/u-boot.git
