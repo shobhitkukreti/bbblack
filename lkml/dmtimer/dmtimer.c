@@ -1,3 +1,7 @@
+/* Programming TI Sitara processor's DMTIMER 7 to fire interrupt every 1 second
+ * Clock Freq: 24Mhz
+ */
+
 #include<linux/kernel.h>
 #include<linux/module.h>
 #include<linux/sched.h>
@@ -14,7 +18,7 @@
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DeathFire");
-MODULE_DESCRIPTION("DMTIMER Driver");
+MODULE_DESCRIPTION("ARCH TIMER");
 
 #define DEVICE_NAME "ARM DMTIMER"
 #define TINT7 95
@@ -23,32 +27,32 @@ MODULE_DESCRIPTION("DMTIMER Driver");
 #define DMTIMER7_REGBASE 0x4804A000
 #define DMTIMER7_REGLEN 0x400
 
-#define DEBUG 0
 
-
-/* Struct Definition */
 struct dmtimer {
 
-struct platform_device *pdev;
-void __iomem * enable_base_addr;
-void __iomem *timer7_base;
-unsigned int virq;
-struct task_struct * my_thread;
+	struct platform_device *pdev;
+	void __iomem * enable_base_addr;
+	void __iomem *timer7_base;
+	unsigned int virq;
+	struct task_struct * my_thread;
 } dmtimer_drv;
 
 
-/* Driver specific functions */
+static void dmtimer_tasklet(unsigned long);
+
 static int dmtimer_probe (struct platform_device *);
 static int dmtimer_remove (struct platform_device *); 
-static int dmtimer_irq_handler (unsigned int irq, void * dev_id, struct pt_regs *reg);
+static irqreturn_t dmtimer_irq_handler (unsigned int irq, void * dev_id, struct pt_regs *reg);
+
+DECLARE_TASKLET(mytsk, dmtimer_tasklet, 0);
 
 /** Thread function prototype **/
 
+#ifdef DEBUG
 static int read_timer (void * data);
+#endif
 
 
-
-/* compatible string much match with dts file src code */
 static const struct of_device_id dmtimer_match[]={
 	{.compatible = "sk,timer-dev", },
 	{},
@@ -60,15 +64,10 @@ static struct platform_driver dmtimer = {
 	.probe = dmtimer_probe,
 	.remove = dmtimer_remove,
 	.driver = {
-			.name = DEVICE_NAME,
-			.of_match_table = of_match_ptr(dmtimer_match),
-		},
+		.name = DEVICE_NAME,
+		.of_match_table = of_match_ptr(dmtimer_match),
+	},
 };
-
-
-/* Module Init functions 
- * Registers the platform driver
- */
 
 static int __init dmtimer_init(void) {
 
@@ -77,19 +76,15 @@ static int __init dmtimer_init(void) {
 	return ret;
 }
 
-
-/* Module cleanup function */
 static void __exit dmtimer_exit(void) {
 
 	if(dmtimer_drv.my_thread) 
 		kthread_stop(dmtimer_drv.my_thread);
-	free_irq(dmtimer_drv.virq, NULL);
+
 	platform_driver_unregister(&dmtimer);
+	tasklet_kill(&mytsk);
+	free_irq(dmtimer_drv.virq, NULL);
 }
-
-
-
-/* Probe functions, remaps io memory, sets up timer and irq handler */
 
 static int dmtimer_probe(struct platform_device *pdev) {
 
@@ -102,23 +97,22 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	if(!dmtimer_drv.virq) {
 		return -1;
 	}
-		
 
-	#ifdef DEBUG
+#ifdef DEBUG
 	pr_info("IRQ NUMBER: %u\n", dmtimer_drv.virq);
-	#endif
+#endif
 
 	if(!r_mem) {
 		printk(KERN_ALERT "Cannot find DMTIMER Base address\n");
 		return -1;
 	}
 
-	#ifdef DEBUG
+#ifdef DEBUG
 	pr_info( "Start: %x END:%x , len:%x \n", (u32)r_mem->start, (u32)r_mem->end, \
-	(u32)r_mem->end-r_mem->start +1);	
-	#endif
+			(u32)r_mem->end-r_mem->start +1);	
+#endif
 
-	
+
 	/* Confirm if IO Memory is available before remapping to virtual space*/
 
 	if((request_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN , "CM_PERIPHERAL")) == NULL) {
@@ -135,28 +129,28 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	/* Physical IO MEM to Virtual IO MEM. Usually an offset */
 	dmtimer_drv.enable_base_addr = ioremap_nocache(CM_PERS_REGBASE, CM_PERS_REGLEN);
 	dmtimer_drv.timer7_base = ioremap_nocache(DMTIMER7_REGBASE, DMTIMER7_REGLEN);
-	
-	#ifdef DEBUG
+
+#ifdef DEBUG
 	pr_info("VMEM 1 : %x\n", (unsigned int)dmtimer_drv.timer7_base);
 	pr_info("VMEM 2 : %x\n", (unsigned int)dmtimer_drv.enable_base_addr);
-	#endif
-	
+#endif
+
 	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
 
-	
+
 	iowrite32(30002, (dmtimer_drv.enable_base_addr + 0x7c)); //enable timer 7 block
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
 	iowrite32(0x03, dmtimer_drv.timer7_base + 0x38); // auto reload mode, enable timer 7
-	
+
 
 	dmtimer_drv.pdev = pdev;
 
-	/* Optional kthread to read reg status */
-	#if 0
+	#ifdef DEBUG
 	dmtimer_drv.my_thread = kthread_run( read_timer, (void *)NULL, "TIMER7-Read");
 	#endif
+
 	return 0;
 }
 
@@ -181,23 +175,25 @@ static int dmtimer_remove (struct platform_device *pdev) {
 
 /* DMTIMER_IRQ_HANDLER */
 
-static int dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
-
+static irqreturn_t dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
-
-	/* Really bad idea to print in IRQ Handler, but this just a demo */
-	pr_info("T7 - 1sec  \n");
-
-	return (irq_handler_t) IRQ_HANDLED;
+	tasklet_schedule(&mytsk); //schedule the tasklet 
+	return IRQ_HANDLED;
 
 }
 
 
+/*Tasklet to print a line*/
+static void dmtimer_tasklet(unsigned long data) {
+	pr_alert("Tasklet T7 -1sec\n");
+}
+
 
 /* Kernel Thread Function Implementation to Read Timer value */
 
+#ifdef DEBUG
 static int read_timer (void * data) {
 
 
@@ -205,12 +201,12 @@ static int read_timer (void * data) {
 		if(kthread_should_stop()) 
 			break;
 
-		pr_alert("TCLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x38));
-		pr_alert("TCRR:%x\n", ioread32(dmtimer_drv.timer7_base +0x3C));
-		pr_alert("TINT7-EN:%x\n", ioread32(dmtimer_drv.timer7_base +0x2c));
-		pr_alert("TINT7-CLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));
-		pr_alert("TLDR:%x\n", ioread32(dmtimer_drv.timer7_base +0x40));
-		pr_alert("TINT STAT:%x\n", ioread32(dmtimer_drv.timer7_base +0x28));
+		pr_info("TCLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x38));
+		pr_info("TCRR:%x\n", ioread32(dmtimer_drv.timer7_base +0x3C));
+		pr_info("TINT7-EN:%x\n", ioread32(dmtimer_drv.timer7_base +0x2c));
+		pr_info("TINT7-CLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x30));
+		pr_info("TLDR:%x\n", ioread32(dmtimer_drv.timer7_base +0x40));
+		pr_info("TINT STAT:%x\n", ioread32(dmtimer_drv.timer7_base +0x28));
 
 		msleep(1000);
 	}
@@ -218,6 +214,7 @@ static int read_timer (void * data) {
 	return 0;
 }
 
+#endif
 
 module_init(dmtimer_init);
 module_exit(dmtimer_exit);
