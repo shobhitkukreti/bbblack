@@ -16,6 +16,7 @@
 #include <linux/interrupt.h>
 #include <linux/of_irq.h>
 
+
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DeathFire");
 MODULE_DESCRIPTION("ARCH TIMER");
@@ -27,6 +28,9 @@ MODULE_DESCRIPTION("ARCH TIMER");
 #define DMTIMER7_REGBASE 0x4804A000
 #define DMTIMER7_REGLEN 0x400
 
+//#define DEBUG
+//#define SINGLE
+
 
 struct dmtimer {
 
@@ -35,6 +39,9 @@ struct dmtimer {
 	void __iomem *timer7_base;
 	unsigned int virq;
 	struct task_struct * my_thread;
+	struct irq_chip irq_chip;
+	unsigned int base;
+	unsigned int enableMask;
 } dmtimer_drv;
 
 
@@ -42,9 +49,22 @@ static void dmtimer_tasklet(unsigned long);
 
 static int dmtimer_probe (struct platform_device *);
 static int dmtimer_remove (struct platform_device *); 
-static irqreturn_t dmtimer_irq_handler (unsigned int irq, void * dev_id, struct pt_regs *reg);
+static irqreturn_t dmtimer_irq_handler(unsigned int irq, void * dev_id, struct pt_regs *reg);
 
 DECLARE_TASKLET(mytsk, dmtimer_tasklet, 0);
+
+static irqreturn_t threaded_handler(int irq, void *dev) 
+{
+		printk(KERN_ALERT "DMTIMER Threaded Handler\n");
+		iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
+		iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
+		iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
+		tasklet_schedule(&mytsk); //schedule the tasklet 
+		return IRQ_HANDLED;
+}
+
+
+
 
 /** Thread function prototype **/
 
@@ -89,6 +109,7 @@ static void __exit dmtimer_exit(void) {
 static int dmtimer_probe(struct platform_device *pdev) {
 
 	struct resource *r_mem;
+	struct dmtimer_irq_chip *irq_chip;
 	int ret=0;
 
 	/* Get Memory Resource as definied in DTS file for Timer7 */
@@ -115,12 +136,12 @@ static int dmtimer_probe(struct platform_device *pdev) {
 
 	/* Confirm if IO Memory is available before remapping to virtual space*/
 
-	if((request_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN , "CM_PERIPHERAL")) == NULL) {
+	if((request_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN, "CM_PERIPHERAL")) == NULL){
 		printk(KERN_ERR "CM PER Memory region already occupied\n");
 		return -EBUSY;
 	}
 
-	if((request_mem_region(r_mem->start, r_mem->end - r_mem->start + 1 , DEVICE_NAME)) == NULL) {
+	if((request_mem_region(r_mem->start, r_mem->end - r_mem->start + 1 , DEVICE_NAME)) == NULL){
 		printk(KERN_ERR "DMTIMER Memory region already occupied\n");
 		return -EBUSY;
 	}
@@ -135,7 +156,31 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	pr_info("VMEM 2 : %x\n", (unsigned int)dmtimer_drv.enable_base_addr);
 #endif
 
-	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,IRQF_TIMER, "DMTIMER7_IRQ_HANDLER", NULL);	
+#ifndef SINGLE
+
+	ret = request_irq(dmtimer_drv.virq, (irq_handler_t)dmtimer_irq_handler,IRQF_TIMER,"DMTIMER7_IRQ_HANDLER", NULL);	
+
+#endif
+
+#ifdef SINGLE
+	ret = dmtimer_irq_init(&irq_chip, dmtimer_drv.virq);
+	if(ret!=0) {
+			printk(KERN_ERR "IRQ_INIT Failed, Err: %d\n", ret);
+			return -1;
+	}
+	else
+		irq_chip->main_irq = dmtimer_drv.virq;
+
+	/* register threaded irq */
+
+	ret = dmtimer_irq_get_irq(irq_chip, 1);
+	if(ret>0)
+		ret = request_threaded_irq(ret, NULL, &threaded_handler, IRQF_ONESHOT, "Threaded-Handler", NULL);
+	else{
+		printk(KERN_ERR "DMTIMER GET IRQ Failed\n");	
+		return -1;
+	}
+#endif
 
 
 	iowrite32(30002, (dmtimer_drv.enable_base_addr + 0x7c)); //enable timer 7 block
@@ -143,7 +188,6 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
 	iowrite32(0x03, dmtimer_drv.timer7_base + 0x38); // auto reload mode, enable timer 7
-
 
 	dmtimer_drv.pdev = pdev;
 
@@ -175,7 +219,9 @@ static int dmtimer_remove (struct platform_device *pdev) {
 
 /* DMTIMER_IRQ_HANDLER */
 
-static irqreturn_t dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
+static irqreturn_t 
+dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
+
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
@@ -196,11 +242,9 @@ static void dmtimer_tasklet(unsigned long data) {
 #ifdef DEBUG
 static int read_timer (void * data) {
 
-
 	while(dmtimer_drv.enable_base_addr && dmtimer_drv.timer7_base) {
 		if(kthread_should_stop()) 
 			break;
-
 		pr_info("TCLR:%x\n", ioread32(dmtimer_drv.timer7_base +0x38));
 		pr_info("TCRR:%x\n", ioread32(dmtimer_drv.timer7_base +0x3C));
 		pr_info("TINT7-EN:%x\n", ioread32(dmtimer_drv.timer7_base +0x2c));

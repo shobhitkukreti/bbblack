@@ -1,1 +1,2 @@
-obj-m +=dmtimer.o
+obj-m +=timer.o
+timer-y := dmtimer.o irq.o
