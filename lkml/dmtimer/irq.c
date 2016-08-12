@@ -63,3 +63,8 @@ int timer_irq_init(void)
 	return 0;
 }
 
+int timer_get_irq (int nested_irq_num)
+{
+
+	return timer_irq_chip.base + nested_irq_num;
+}

@@ -39,17 +39,35 @@ struct dmtimer {
 	void __iomem *timer7_base;
 	unsigned int virq;
 	struct task_struct * my_thread;
-	struct irq_chip irq_chip;
-	unsigned int base;
-	unsigned int enableMask;
 } dmtimer_drv;
 
 
-static void dmtimer_tasklet(unsigned long);
+struct bb_irq_chip {
+    struct irq_chip chip;
+    unsigned int enabledMask;
+    unsigned int base;
+};
 
+
+extern struct bb_irq_chip timer_irq_chip;
+extern int timer_irq_init(void);
+extern int timer_get_irq(int);
+
+static void dmtimer_tasklet(unsigned long);
 static int dmtimer_probe (struct platform_device *);
 static int dmtimer_remove (struct platform_device *); 
+
+/* IRQ Handlers */
 static irqreturn_t dmtimer_irq_handler(unsigned int irq, void * dev_id, struct pt_regs *reg);
+
+static irqreturn_t timer_irq_handler(unsigned int irq, void *data ) 
+{
+	
+	pr_info ("%s, IRQ Triggered :%u\n", __func__, irq);
+
+	return IRQ_HANDLED;
+}
+
 
 DECLARE_TASKLET(mytsk, dmtimer_tasklet, 0);
 
@@ -62,8 +80,6 @@ static irqreturn_t threaded_handler(int irq, void *dev)
 		tasklet_schedule(&mytsk); //schedule the tasklet 
 		return IRQ_HANDLED;
 }
-
-
 
 
 /** Thread function prototype **/
@@ -89,12 +105,14 @@ static struct platform_driver dmtimer = {
 	},
 };
 
+
 static int __init dmtimer_init(void) {
 
 	int ret=0;
 	ret=platform_driver_register(&dmtimer);
 	return ret;
 }
+
 
 static void __exit dmtimer_exit(void) {
 
@@ -106,11 +124,13 @@ static void __exit dmtimer_exit(void) {
 	free_irq(dmtimer_drv.virq, NULL);
 }
 
+
 static int dmtimer_probe(struct platform_device *pdev) {
 
 	struct resource *r_mem;
 	struct dmtimer_irq_chip *irq_chip;
 	int ret=0;
+	int nested_irq = 0;
 
 	/* Get Memory Resource as definied in DTS file for Timer7 */
 	r_mem = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -182,8 +202,22 @@ static int dmtimer_probe(struct platform_device *pdev) {
 	}
 #endif
 
+	timer_irq_init();
+	nested_irq = timer_get_irq(2);
 
+	pr_info("%s, Adding Nested IRQ : %u\n", __func__, nested_irq);
+	
+	ret = request_threaded_irq (nested_irq, NULL, (irq_handler_t )&timer_irq_handler, IRQF_ONESHOT, \
+												"Timer Nested IRQ Handler", NULL);
+
+
+	pr_alert("DMTIMER7 Module Status: %x \n", ioread32(dmtimer_drv.enable_base_addr + 0x7c));
+	pr_alert("DMTIMER7 Clocl L4LS Gate State :%x\n", ioread32(dmtimer_drv.enable_base_addr));
+	iowrite32(0x02, dmtimer_drv.enable_base_addr ); // enable L4LS_CLKSTCTRL
 	iowrite32(30002, (dmtimer_drv.enable_base_addr + 0x7c)); //enable timer 7 block
+	wmb();
+	pr_alert("DMTIMER7 Module Status: %x \n", ioread32(dmtimer_drv.enable_base_addr + 0x7c));
+	pr_alert("DMTIMER7 Clocl L4LS Gate State :%x\n", ioread32(dmtimer_drv.enable_base_addr));
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x3c); // write init value to tclr reg
 	iowrite32(0xFE91C9FF, dmtimer_drv.timer7_base + 0x40); // put auto reload value 0x00 in TLDR reg
@@ -222,10 +256,12 @@ static int dmtimer_remove (struct platform_device *pdev) {
 static irqreturn_t 
 dmtimer_irq_handler (unsigned int irq, void *dev_id, struct pt_regs *regs) {
 
+	iowrite32(0x30002, (dmtimer_drv.enable_base_addr + 0x7c));
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x30); // disable timer 7 interrupt
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x28); // clear timer 7 int pending bit by writing 1
 	iowrite32(0x02, dmtimer_drv.timer7_base + 0x2c); // enable timer 7 over flow intrpt
 	tasklet_schedule(&mytsk); //schedule the tasklet 
+	handle_nested_irq (timer_irq_chip.base + 2);
 	return IRQ_HANDLED;
 
 }
