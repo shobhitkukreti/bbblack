@@ -27,7 +27,11 @@ MODULE_DESCRIPTION("WS2812B Driver with TI PWM");
 #define CM_PERS_REGLEN 0x400
 #define PWMSS_BASE 0x48300000
 #define PWMSS_REGLEN 0x10
+#define CTRL_BASE (0X44E10000 + 0x664) /*Control Module */
 
+
+/* Enable CLKCONFIG Register of PWMSS0. The driver is from TI 
+with this function exported */
 extern u16 pwmss_submodule_state_change(struct device *dev, int set);
 
 struct pwmss_info {
@@ -44,6 +48,7 @@ struct resource *r_mem;
 void __iomem *pwm_base;
 void __iomem *cm_pers_base;
 void __iomem *pwmss_base;
+void __iomem *ctrl;
 unsigned int virq;
 struct task_struct *my_thread;
 }epwm;
@@ -96,11 +101,21 @@ static int  pwm_probe ( struct platform_device *pdev )
 	
 	}
 
+	if(!(request_mem_region(CTRL_BASE, 4 ,"Control_Module")))
+	{
+		pr_err ("%s, Control Module  Memory  Used by Another Driver\n",__func__);
+	
+	}
+
+	epwm.ctrl = ioremap_nocache(CTRL_BASE, 4);
+	
+
 	epwm.pwm_base = ioremap_nocache(epwm.r_mem->start, resource_size(epwm.r_mem));
 	epwm.cm_pers_base = ioremap_nocache(CM_PERS_REGBASE, CM_PERS_REGLEN);
 
 //	status = pwmss_submodule_state_change(pdev->dev.parent, 0x08);
 //	wmb();
+	iowrite32(0x01, epwm.ctrl);
 
 	pwmss = dev_get_drvdata(pdev->dev.parent);
 
@@ -155,6 +170,8 @@ static int pwm_remove (struct platform_device *pdev)
 
 iounmap(epwm.cm_pers_base);
 iounmap(epwm.pwm_base);
+iounmap(epwm.ctrl);
+releaae_mem_region(CTRL_BASE, 4); 
 release_mem_region(epwm.r_mem->start, resource_size(epwm.r_mem));
 release_mem_region(CM_PERS_REGBASE, CM_PERS_REGLEN);
 printk(KERN_INFO"SK,PWM-DEV Remove");
