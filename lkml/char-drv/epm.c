@@ -51,7 +51,8 @@ struct class *epm_class;
 
 int epm_cdev_init(void) {
 	
-	/* Requesting major number */
+	/* Requesting major number, Check cat /proc/devices for \
+		your major,minur number */
 
 	if(alloc_chrdev_region(&epm_number, 0, 1, DEVICE_NAME) < 0) {
 		printk(KERN_DEBUG "Cannot register device '%s'\n",DEVICE_NAME);
@@ -67,7 +68,9 @@ int epm_cdev_init(void) {
 		return -1;
 	}
 	
-	/* cdev_init Connects file node with file operations */
+	/* cdev_alloc() can be used if a standalone cdev struct is needed \
+	if cdev struct is embedded in another structure use cdev_init() \
+	and cdev_add(). cdev_init Connects file node with file operations */
 	cdev_init(&(epm_drv->dev), &fops);
 
 	epm_drv->dev.owner = THIS_MODULE;
