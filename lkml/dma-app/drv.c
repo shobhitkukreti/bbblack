@@ -10,15 +10,14 @@
 void main()
 {
 
-int fd = open("/dev/pci_mmap", O_RDONLY, 0);
-assert(fd !=-1);
+char rdBuf[7];
+int fd = open("/dev/som_mmap", O_RDONLY, 0);
 
 char *mem = mmap(NULL, 1024 * 4096, PROT_READ, MAP_SHARED, fd, 0);
 
-assert(mem !=MAP_FAILED);
-
-write(1, (char*)mem, 6);
-munmap(mem, 4096);
+memcpy(rdBuf, mem, 7);
+printf("Data Read:%s\n", rdBuf);
+munmap(mem, 1024 * 4096);
 close (fd);
 }
 

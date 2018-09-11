@@ -8,7 +8,7 @@
 #include <linux/device.h>
 #include <linux/kdev_t.h>
 #include <linux/spi/spi.h>
-
+#include <linux/delay.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("DeathFire");
@@ -154,8 +154,9 @@ return 0;
 
 int generic_open (struct inode *in, struct file *filp) {
 
-printk("HTC EPM Test Open Function\n");
 
+printk("HTC EPM Test Open Function\n");
+msleep(5000);
 return 0;
 }
 
