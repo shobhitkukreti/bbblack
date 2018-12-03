@@ -7,15 +7,18 @@
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-fh.h>
 #include <media/videobuf2-v4l2.h>
+#include <media/v4l2-event.h>
+#include <media/v4l2-ctrls.h>
 #include <linux/device.h>
 #include <linux/spinlock.h>
 #include <linux/mutex.h>
+#include <media/videobuf2-vmalloc.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Shobhit K");
 MODULE_DESCRIPTION("Fake V4L2 Driver");
 
-
+/*
 enum vb2_buffer_state {
 	VB2_BUF_STATE_DEQUEUED,
 	VB2_BUF_STATE_PREPARED,
@@ -24,6 +27,7 @@ enum vb2_buffer_state {
 	VB2_BUF_STATE_DONE,
 	VB2_BUF_STATE_ERROR,
 };
+*/
 
 /* buffer mgt ops */
 static struct vb2_ops fake_video_ops = {
@@ -42,7 +46,7 @@ struct fake_vid_fmt {
 	int depth;
 };
 
-static struct fake_vid_formats[] = {
+static struct fake_vid_fmt formats[] = {
 {
 	.name = "RGB24",
 	.fourcc = V4L2_PIX_FMT_RGB24,
@@ -67,7 +71,7 @@ struct single_frame {
 
 };
 
-
+//char driver fops
 static const struct v4l2_file_operations vid4linux_fops = {
         .owner = THIS_MODULE,
 /* v4l2 file operation helpers from videobuf2-core.h */
@@ -79,19 +83,92 @@ static const struct v4l2_file_operations vid4linux_fops = {
         .unlocked_ioctl = video_ioctl2,
 };
 
+static LIST_HEAD(fake_vid_list);
 
+struct fake_vid_device {
+	struct list_head fake_vid_list;
+	struct v4l2_device v4l2dev;
+	struct video_device vdev;
+	struct vb2_queue vidqueue;
+	struct v4l2_ctrl *brightness;
+	struct v4l2_ctrl *contrast;
+	struct v4l2_ctrl *saturation;
+	struct v4l2_ctrl *hue;
+	struct v4l2_ctrl *volume;
+	struct v4l2_ctrl *boolean;
+	spinlock_t slock;
+	struct mutex mutex;
+	struct fake_vid_fmt *fmt;
+	struct vb2_queue fake_vid_queue;
+	unsigned width, height;
+
+};
+
+static int vidioc_querycap(struct file *file, void  *priv,
+					struct v4l2_capability *cap)
+{
+	struct fake_vid_device *dev = video_drvdata(file);
+
+	strcpy(cap->driver, "fake_vid_device");
+	strcpy(cap->card, "fake_vid_device");
+	strlcpy(cap->bus_info, dev->v4l2dev.name, sizeof(cap->bus_info));
+	cap->device_caps = V4L2_CAP_VIDEO_CAPTURE | V4L2_CAP_STREAMING |
+			    V4L2_CAP_READWRITE;
+	cap->capabilities = cap->device_caps | V4L2_CAP_DEVICE_CAPS;
+	return 0;
+}
+
+// get video format enum
+static int vidioc_enum_fmt_vid_cap(struct file *file, void  *priv,
+					struct v4l2_fmtdesc *f)
+{
+	struct fake_vid_fmt *fmt;
+
+	if (f->index >= ARRAY_SIZE(formats))
+		return -EINVAL;
+
+	fmt = &formats[f->index];
+
+	strlcpy(f->description, fmt->name, sizeof(f->description));
+	f->pixelformat = fmt->fourcc;
+	return 0;
+}
+
+//get video format height width
+static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
+					struct v4l2_format *f)
+{
+	struct fake_vid_device *dev = video_drvdata(file);
+
+	f->fmt.pix.width        = dev->width;
+	f->fmt.pix.height       = dev->height;
+	f->fmt.pix.field        = V4L2_FIELD_INTERLACED;
+	f->fmt.pix.pixelformat  = dev->fmt->fourcc;
+	f->fmt.pix.bytesperline =
+		(f->fmt.pix.width * dev->fmt->depth) >> 3;
+	f->fmt.pix.sizeimage =
+		f->fmt.pix.height * f->fmt.pix.bytesperline;
+	if (dev->fmt->fourcc == V4L2_PIX_FMT_YUYV ||
+	    dev->fmt->fourcc == V4L2_PIX_FMT_UYVY)
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SMPTE170M;
+	else
+		f->fmt.pix.colorspace = V4L2_COLORSPACE_SRGB;
+	return 0;
+}
+
+//ioctl ops
 static const struct v4l2_ioctl_ops fake_ioctl_ops = {
         .vidioc_querycap      = vidioc_querycap,
         .vidioc_enum_fmt_vid_cap  = vidioc_enum_fmt_vid_cap,
         .vidioc_g_fmt_vid_cap     = vidioc_g_fmt_vid_cap,
-        .vidioc_try_fmt_vid_cap   = vidioc_try_fmt_vid_cap,
-        .vidioc_s_fmt_vid_cap     = vidioc_s_fmt_vid_cap,
-        .vidioc_querystd      = vidioc_querystd,
-        .vidioc_g_std         = vidioc_g_std,
-        .vidioc_s_std         = vidioc_s_std,
-        .vidioc_enum_input    = vidioc_enum_input,
-        .vidioc_g_input       = vidioc_g_input,
-        .vidioc_s_input       = vidioc_s_input,
+//        .vidioc_try_fmt_vid_cap   = vidioc_try_fmt_vid_cap,
+//        .vidioc_s_fmt_vid_cap     = vidioc_s_fmt_vid_cap,
+//        .vidioc_querystd      = vidioc_querystd,
+//        .vidioc_g_std         = vidioc_g_std,
+//        .vidioc_s_std         = vidioc_s_std,
+//        .vidioc_enum_input    = vidioc_enum_input,
+//        .vidioc_g_input       = vidioc_g_input,
+//        .vidioc_s_input       = vidioc_s_input,
 
         /* vb2 takes care of these, Helper functions are already provided in videobuf2-core.h*/
         .vidioc_reqbufs       = vb2_ioctl_reqbufs,
@@ -113,22 +190,6 @@ static const struct v4l2_ioctl_ops fake_ioctl_ops = {
 };
 
 
-struct fake_vid_device {
-	struct v4l2_device v4l2dev;
-	struct video_device vdev;
-	struct vb2_queue vidqueue;
-	struct v4l2_ctrl *brightness;
-	struct v4l2_ctrl *contrast;
-	struct v4l2_ctrl *saturation;
-	struct v4l2_ctrl *hue;
-	struct v4l2_ctrl *volume;
-	struct v4l2_ctrl *boolean;
-	spinlock_t slock;
-	struct mutex mutex;
-	struct fake_vid_fmt *fmt;
-	struct vb2_queue fake_vid_queue
-
-};
 
 static int __init v4l2_init(void)
 {
@@ -143,6 +204,10 @@ static int __init v4l2_init(void)
 	vdev = &dev->vdev;
 	vq = &dev->vidqueue;
 	memset(vq, 0, sizeof(*vq));
+
+	dev->fmt = &formats[0];
+	dev->width = 640;
+	dev->height = 480;
 
 	vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	vq->io_modes = VB2_MMAP | VB2_USERPTR | VB2_READ;
@@ -187,14 +252,26 @@ static int __init v4l2_init(void)
 		printk(KERN_ALERT, "Failed to Register Video Device\n");
 		return -1;
 	}
+	list_add_tail(&dev->fake_vid_list, &fake_vid_list);
 
 	return 0;
 }
 
 void v4l2_exit(void){
-video_unregister_device(vdev);
-v4l2_device_unregister(v4l2dev);
+struct list_head *list;
+struct fake_vid_device *dev;
 
+while(!list_empty(&fake_vid_list)) {
+	list = fake_vid_list.next;
+	list_del(list);
+	//copy of container of 
+	// finds the parent structure from the member of the structure
+	dev = list_entry(list, struct fake_vid_device, fake_vid_list);
+	printk(KERN_INFO "Deregistering V4L2 Device\n");
+	video_unregister_device(&dev->vdev);
+	v4l2_device_unregister(&dev->v4l2dev);
+	kfree(dev);
+}
 
 }
 
