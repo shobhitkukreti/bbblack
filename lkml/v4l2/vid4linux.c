@@ -29,7 +29,7 @@ struct fake_vid_dmaq{
 	//	wait_queue_head_t wq;
 	/* counters for fps */
 	int frame;
-	int jiffies
+	int jiffies;
 };
 
 //Buffer for a single frame of image
@@ -64,42 +64,48 @@ struct fake_vid_device {
 static int frame_generation_thread(void *data){
 	struct fake_vid_device *dev = data;
 	struct fake_vid_dmaq *dmaq = &dev->dmaq;
-	unsigned flags=0;
+	struct single_frame *sbuf=NULL;
+	void *vbuf=NULL;
+	//fake image.
+	char img[128];
+	
 	//set_freezable(); //current task can be suspended and wont keep the cpu awake
 
 	unsigned int timeout=0;
 	timeout = msecs_to_jiffies((200));
 	while(1)
 	{
-//		if (kthread_should_stop())
-//			break;
-		spin_lock_irqsave(&dev->slock, flags);	
-		if(list_empty(&dmaq->active)){
-			printk(KERN_ERR "------ Fake Vid Device Buffer List is Empty, Abort\n");	
-		spin_unlock_irqrestore(&dev->slock, flags);
+		if (kthread_should_stop())
+			break;
+		
+		spin_lock(&dev->slock);	
+		if(!list_empty(&dmaq->active)){
+		sbuf = list_entry(dmaq->active.next, struct single_frame, list);
+		list_del(&sbuf->list); // once done with buffer, dequeue it.
+		spin_unlock(&dev->slock);
+		if(sbuf==NULL){
+			pr_err("---Fake Vid Linux SBUF is NULL or List is NULL\n");
+			return -1;
+		}
+		}
+		else{
+		pr_err("------ Fake Vid Device Buffer List is Empty, Abort\n");	
+		spin_unlock(&dev->slock);
 			return -1;
 			
 		}
-		
-		spin_lock_irqsave(&dev->slock, flags);
-		struct single_frame *sbuf = list_entry(dmaq->active.next, struct single_frame, list);
-		if(sbuf==NULL){
-			printk(KERN_ERR, "---Fake Vid Linux SBUF is NULL or List is NULL\n");
-			return -1;
-		}
-		list_del(&sbuf->list); // once done with buffer, dequeue it.
-		spin_unlock_irqrestore(&dev->slock, flags);
-		void *vbuf = vb2_plane_vaddr(&sbuf->vb, 0);
+		vbuf = vb2_plane_vaddr(&sbuf->vb, 0);
 		if(vbuf==NULL){
-			printk(KERN_ERR, "---Fake VID Linux K VADDR Not allocated\n");
+			pr_err("---Fake VID Linux K VADDR Not allocated\n");
 			return -1;
 
 		}
-		memset(vbuf, 200, dev->width*dev->height);
+		pr_info("VBUF ADDR :%p\n",vbuf); 
+		sprintf(img,"Text Masquerading as RGB Data");
+		memcpy(vbuf, img, 128);
 		sbuf->vb.timestamp = 0x555555;
-		printk(KERN_INFO "----Fake Vid Linux, Memset the Buffer\n");
 		vb2_buffer_done(&sbuf->vb, VB2_BUF_STATE_DONE);
-		printk(KERN_INFO "----Fake Vid Linux, Memset the Buffer\n");
+		pr_info("----Fake Vid Linux, Memset the Buffer\n");
 		schedule_timeout_interruptible(timeout);
 	}
 
@@ -111,11 +117,11 @@ static int start_frame_generation(struct fake_vid_device *dev){
 	struct fake_vid_dmaq *dmaq = &dev->dmaq;
 	dmaq->kthread = kthread_run(frame_generation_thread, dev, dev->v4l2dev.name);
 	if(IS_ERR(dmaq->kthread)){
-		printk(KERN_ERR "--------Fake Vid Device Kthread RUn Failed\n");
+		pr_err("--------Fake Vid Device Kthread RUn Failed\n");
 		return PTR_ERR(dmaq->kthread);
 	}
 
-	printk(KERN_INFO "-------- Fake Vid Device Kthread Started\n");
+	pr_info("-------- Fake Vid Device Kthread Started\n");
 
 	return 0;
 }
@@ -127,7 +133,7 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *num_buffers, unsigned
 		unsigned int sizes[], struct device *alloc_devs[])
 {
 
-	printk(KERN_INFO "----------Fake Vid Linux NBuffers:: %d\n", *num_buffers);
+	pr_info("----------Fake Vid Linux NBuffers:: %d\n", *num_buffers);
 
 	*num_planes=1;
 	sizes[0] = 640*480*3;
@@ -137,7 +143,7 @@ static int queue_setup(struct vb2_queue *vq, unsigned int *num_buffers, unsigned
 
 static int buf_init(struct vb2_buffer *vb){
 
-	printk(KERN_INFO "---Fake Vid Device Buf Init Called for IO Operations \n Index Number %d\n", vb->index);
+	pr_info("---Fake Vid Device Buf Init Called for IO Operations \n Index Number %d\n", vb->index);
 	return 0;
 }
 
@@ -148,9 +154,10 @@ static int buf_prepare(struct vb2_buffer *vb){
 
 	unsigned int size = dev->width * dev->height * dev->pixelsize;
 	if(vb2_plane_size(vb, 0) < size){
-		printk(KERN_ERR " Fake Vid Linux, Buffer Size !=Image Size\n");
+		pr_err(" Fake Vid Linux, Buffer Size !=Image Size\n");
 		return -ENOMEM;
 	}
+	pr_info("--- Buffer Prepare Sz: %u\n", size);
 	vb2_set_plane_payload(&sbuf->vb, 0 ,size);
 	sbuf->fmt = dev->fmt;
 	return 0;
@@ -160,30 +167,43 @@ static void buf_queue(struct vb2_buffer *vb){
 	struct fake_vid_device *dev = vb2_get_drv_priv(vb->vb2_queue);
 	struct single_frame *sbuf = container_of(vb, struct single_frame, vb);
 	struct fake_vid_dmaq *dmaq = &dev->dmaq;
-	unsigned long flags = 0;
+	pr_info("---- Fake Vid Device QBUF\n");
 
-	printk(KERN_INFO "---- Fake Vid Device QBUF\n");
-
-	spin_lock_irqsave(&dev->slock, flags);
+	spin_lock(&dev->slock);
 	list_add_tail(&sbuf->list, &dmaq->active);
 	if(list_empty(&dmaq->active)){
-		printk(KERN_ERR "-----Fake Vid Linux, QBUF list operation failed\n");
+		pr_err("-----Fake Vid Linux, QBUF list operation failed\n");
 	}
-	spin_unlock_irqrestore(&dev->slock, flags);
+	spin_unlock(&dev->slock);
 }
 
 
 static int start_streaming(struct vb2_queue *vq, unsigned int count){
 	int ret = 0;
 	struct fake_vid_device *dev = vb2_get_drv_priv(vq);
-	printk(KERN_INFO "------ Fake Vid Linux Start Streaming\n");
+	pr_info("------ Fake Vid Linux Start Streaming\n");
 	ret = start_frame_generation(dev);
 
 	return ret;
 }
 
 static void stop_streaming(struct vb2_queue *vq){
+	struct fake_vid_device *dev = vb2_get_drv_priv(vq);
+	struct fake_vid_dmaq *dmaq = &dev->dmaq;
+	struct single_frame *sbuf=NULL;
+	if(dmaq->kthread){
+		kthread_stop(dmaq->kthread);
+		dmaq->kthread=NULL;
 
+	}
+	while(!list_empty(&dmaq->active)){
+		sbuf = list_entry(dmaq->active.next, struct single_frame, list);
+		list_del(&sbuf->list);
+		vb2_buffer_done(&sbuf->vb, VB2_BUF_STATE_ERROR);
+
+	}
+
+pr_info("Stopping Kthread\n");
 }
 
 static struct vb2_ops fake_video_ops = {
@@ -237,7 +257,7 @@ static int vidioc_querycap(struct file *file, void  *priv,
 		struct v4l2_capability *cap)
 {
 	struct fake_vid_device *dev = video_drvdata(file);
-	printk(KERN_INFO "---Fake Vid Device Query Cap\n");
+	pr_info("---Fake Vid Device Query Cap\n");
 	strcpy(cap->driver, "fake_vid_device");
 	strcpy(cap->card, "fake_vid_device");
 	strlcpy(cap->bus_info, dev->v4l2dev.name, sizeof(cap->bus_info));
@@ -288,7 +308,7 @@ static int vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 }
 static int vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 		struct v4l2_format *f){
-	printk(KERN_INFO "-----Fake Vid Device VIDIOC_S_FMT_VID_CAP\n");
+	pr_info("-----Fake Vid Device VIDIOC_S_FMT_VID_CAP\n");
 
 
 	return -1;
@@ -346,6 +366,7 @@ static int __init v4l2_init(void)
 	dev->fmt = &formats[0];
 	dev->width = 640;
 	dev->height = 480;
+	dev->pixelsize =3;
 
 	vq->type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 	vq->io_modes = VB2_MMAP | VB2_USERPTR | VB2_READ;
@@ -353,6 +374,9 @@ static int __init v4l2_init(void)
 	vq->buf_struct_size = sizeof(struct single_frame);
 	vq->mem_ops = &vb2_vmalloc_memops;
 	vq->ops = &fake_video_ops;
+	vq->timestamp_flags = V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC;
+	vq->min_buffers_needed=1;
+	vq->lock = &dev->mutex;
 	vb2_queue_init(vq);
 	spin_lock_init(&dev->slock);
 	mutex_init(&dev->mutex);
@@ -365,19 +389,19 @@ static int __init v4l2_init(void)
 	snprintf(v4l2dev->name, sizeof(v4l2dev->name), "sk-video1");
 
 	if(v4l2_device_register(NULL, v4l2dev)<0){
-		printk(KERN_ALERT "Failed to Register V4L2 Device\n");
+		pr_alert("Failed to Register V4L2 Device\n");
 		return -1;
 	}
 	else 
-		printk(KERN_ALERT "Registered V4l2 Device\n");
+		pr_alert("Registered V4l2 Device\n");
 
 	vdev = video_device_alloc();
 	if(!vdev){
-		printk(KERN_ALERT "Video Device Alloc Failed\n");
+		pr_alert("Video Device Alloc Failed\n");
 		return -ENOMEM;
 	}
 	else
-		printk(KERN_ALERT "Allocated Video Device Struct\n");
+		pr_alert("Allocated Video Device Struct\n");
 
 	vdev->release = video_device_release;
 	vdev->v4l2_dev = v4l2dev;
@@ -390,7 +414,7 @@ static int __init v4l2_init(void)
 	// need to add fops
 
 	if(video_register_device(vdev, VFL_TYPE_GRABBER, -1)<0) {
-		printk(KERN_ALERT "-----Fake Vid Device Failed to Register Video Device\n");
+		pr_alert( "-----Fake Vid Device Failed to Register Video Device\n");
 		return -1;
 	}
 	list_add_tail(&dev->fake_vid_list, &fake_vid_list);
@@ -408,7 +432,7 @@ void v4l2_exit(void){
 		//copy of container of 
 		// finds the parent structure from the member of the structure
 		dev = list_entry(list, struct fake_vid_device, fake_vid_list);
-		printk(KERN_INFO "Deregistering V4L2 Device\n");
+		pr_info("Deregistering V4L2 Device\n");
 		video_unregister_device(&dev->vdev);
 		v4l2_device_unregister(&dev->v4l2dev);
 		kfree(dev);
