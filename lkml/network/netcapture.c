@@ -1,23 +1,22 @@
-#include <linux/module.h> // included for all kernel modules
-#include <linux/kernel.h> // included for KERN_INFO
-#include <linux/init.h> // included for __init and __exit macros
-#include <linux/skbuff.h> // included for struct sk_buff
-#include <linux/if_packet.h> // include for packet info
-#include <linux/ip.h> // include for ip_hdr 
-#include <linux/netdevice.h> // include for dev_add/remove_pack
-#include <linux/if_ether.h> // include for ETH_P_ALL
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/skbuff.h>
+#include <linux/if_packet.h>
+#include <linux/ip.h>
+#include <linux/netdevice.h>
+#include <linux/if_ether.h>
 
 MODULE_LICENSE("GPL");
-MODULE_AUTHOR("DeathFire");
-MODULE_DESCRIPTION("Capture Network Packets");
+MODULE_AUTHOR("S.K.");
+MODULE_DESCRIPTION("Capture Network Packets on Interface");
 
 struct packet_type network_packet;
 
-int
-packet_rcv (struct sk_buff *skb, struct net_device *dev,
- struct packet_type *pt, struct net_device *orig_dev)
+int packet_rcv(struct sk_buff *skb, struct net_device *dev,
+	struct packet_type *pt, struct net_device *orig_dev)
 {
- printk(KERN_INFO "@DeathFire : New packet captured.\n");
+	pr_info("@DeathFire : New packet captured.\n");
 
 /* linux/if_packet.h : Packet types */
  // #define PACKET_HOST 0 /* To us */
@@ -33,42 +32,39 @@ packet_rcv (struct sk_buff *skb, struct net_device *dev,
 
 
 
-switch (skb->pkt_type)
- {
- case PACKET_HOST:
- printk(KERN_INFO "@DeathFire PACKET to us\n ");
- break;
- case PACKET_BROADCAST:
- printk(KERN_INFO "@DeathFire : PACKET to all\n");
- break;
- case PACKET_MULTICAST:
- printk(KERN_INFO "@DeathFire : PACKET to group\n");
- break;
- case PACKET_OTHERHOST:
- printk(KERN_INFO "@DeathFire : PACKET to someone else\n");
- break;
- case PACKET_OUTGOING:
- printk(KERN_INFO "@DeathFire : PACKET outgoing\n");
- break;
- case PACKET_LOOPBACK:
- printk(KERN_INFO "@DeathFire : PACKET LOOPBACK\n");
- break;
- case PACKET_FASTROUTE:
- printk(KERN_INFO "@DeathFire: PACKET FASTROUTE\n");
- break;
- }
-
-printk(KERN_CONT "Dev: %s ; 0x%.4X ; 0x%.4X \n", skb->dev->name, 
-                  ntohs(skb->protocol), ip_hdr(skb)->protocol);
-
-printk(KERN_INFO "@DeathFire : VLAN ID :%u\n", ntohs((skb->vlan_tci))&0XFFF);
-
-kfree_skb (skb);
-return 0;
+switch (skb->pkt_type) {
+case PACKET_HOST:
+	pr_info("@DeathFire PACKET to us\n ");
+	break;
+case PACKET_BROADCAST:
+	pr_info("@DeathFire : PACKET to all\n");
+	 break;
+case PACKET_MULTICAST:
+	pr_info("@DeathFire : PACKET to group\n");
+	break;
+case PACKET_OTHERHOST:
+	pr_info("@DeathFire : PACKET to someone else\n");
+	break;
+case PACKET_OUTGOING:
+	pr_info("@DeathFire : PACKET outgoing\n");
+	break;
+case PACKET_LOOPBACK:
+	pr_info("@DeathFire : PACKET LOOPBACK\n");
+	break;
+case PACKET_FASTROUTE:
+	pr_info("@DeathFire: PACKET FASTROUTE\n");
+	break;
 }
 
-static int __init
-net_init(void)
+pr_info("Dev: %s ; 0x%.4X ; 0x%.4X\n", skb->dev->name,
+		  ntohs(skb->protocol), ip_hdr(skb)->protocol);
+pr_info("@SK : VLAN ID :%u\n", ntohs((skb->vlan_tci))&0XFFF);
+
+	kfree_skb(skb);
+	return 0;
+}
+
+static int __init net_init(void)
 {
  /* See the <linux/if_ether.h>
  When protocol is set to htons(ETH_P_ALL), then all protocols are received.
@@ -83,32 +79,31 @@ net_init(void)
  //ETH_P_802_2 0x0004 /* 802.2 frames */
  //ETH_P_SNAP 0x0005 /* Internal only */
 
-network_packet.type = htons(ETH_P_IP);
+	network_packet.type = htons(ETH_P_IP);
 
 /* NULL is a wildcard */
  //network_packet.dev = NULL;
- network_packet.dev = dev_get_by_name (&init_net, "enx0050b6216fee");
-
-network_packet.func = packet_rcv;
+	network_packet.dev = dev_get_by_name(&init_net,
+			"enx0050b6216fee");
+	network_packet.func = packet_rcv;
 
 /* Packet sockets are used to receive or send raw packets at the device
  driver (OSI Layer 2) level. They allow the user to implement
  protocol modules in user space on top of the physical layer. */
 
 /* Add a protocol handler to the networking stack.
- The passed packet_type is linked into kernel lists and may not be freed until 
+ The passed packet_type is linked into kernel lists and may not be freed until
   it has been removed from the kernel lists. */
- dev_add_pack (&network_packet);
+	dev_add_pack(&network_packet);
 
-printk(KERN_INFO "Module insertion completed successfully!\n");
- return 0; // Non-zero return means that the module couldn't be loaded.
+	pr_info("Module insertion successfully!\n");
+	return 0; // Non-zero return means that the module couldn't be loaded.
 }
 
-static void __exit
-net_cleanup(void)
+static void __exit net_cleanup(void)
 {
- dev_remove_pack(&network_packet);
- printk(KERN_INFO "Cleaning up module....\n");
+	dev_remove_pack(&network_packet);
+	pr_info("Cleaning up module..\n");
 }
 
 module_init(net_init);
