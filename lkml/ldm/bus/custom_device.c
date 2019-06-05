@@ -91,16 +91,27 @@ int custom_unregister_driver(struct custom_driver *driver)
 }
 EXPORT_SYMBOL(custom_unregister_driver);
 
+static void custom_dev_release(struct device *dev){
+	pr_info("Custom Device Release\n");
+}
+
 int custom_register_device(struct custom_device *dev)
 {
 	dev->dev.parent = &custom_bus_parent;
 	dev->dev.bus = &custom_bus_type;
+	dev->dev.release = custom_dev_release;
+	pr_info("Register Custom Device %s", dev->name);
+//	strncpy(dev->dev.init_name, dev->name, strlen(dev->dev.init_name));
+	dev_set_name(&dev->dev, dev->name);
+//	dev->dev.init_name = dev->name;
 	return device_register(&dev->dev);
 }
 EXPORT_SYMBOL(custom_register_device);
 
 void custom_unregister_device(struct custom_device *dev) 
 {
+//	BUG_ON(dev->dev==NULL);
+	pr_err("Unregister custom device %s\n", dev->name);
 	device_unregister(&dev->dev);
 }
 EXPORT_SYMBOL(custom_unregister_device);
@@ -122,7 +133,7 @@ struct custom_device * custom_device_alloc(const char *name, int id)
 EXPORT_SYMBOL(custom_device_alloc);
 
 static struct custom_device cus_dev = {
-	.name = "Custom - Device",
+	.name = "Custom-Device1",
 };
 
 
@@ -138,14 +149,26 @@ static int __init custom_bus_init(void)
 //		goto err1;
 	
 	// register the parent device
-	device_register(&custom_bus_parent);
+	ret = device_register(&custom_bus_parent);
+	if(ret <0){
+		pr_err("Failed to Register Custom Bus Parent\n");
+		goto err1;
+	}
 
-	custom_register_device(&cus_dev);	
+	ret = custom_register_device(&cus_dev);	
+	if(ret < 0){
+		pr_err("Failed to Create Custom Device\n");
+		device_unregister(&custom_bus_parent);
+		goto err1;
+		
+	}
+
 	return 0;
 
 err1:
 	bus_unregister(&custom_bus_type);
 err0:
+	pr_err("Custom Insert Mod Error :%d\n", ret);
 	return ret;
 		
 }
@@ -153,7 +176,8 @@ err0:
 static void  custom_bus_exit(void){
 
 	custom_unregister_device(&cus_dev);
-	device_unregister(&custom_bus_parent);
+	pr_info("Now Unregister Custom Bus\n");
+	//	device_unregister(&custom_bus_parent);
 	bus_unregister(&custom_bus_type);
 }
 
