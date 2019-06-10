@@ -6,35 +6,15 @@
 #include <linux/printk.h>
 #include <linux/slab.h>
 #include <linux/init.h>
-#include "../include/custom_bus.h"
-
+#include <../include/custom_bus.h>
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("skukreti");
 MODULE_DESCRIPTION(" Custom Bus Creation ");
 
-//#define to_custom_driver(d) container_of(d, struct packt_driver, driver);
+#define to_custom_device(d) container_of(d, struct custom_device, dev);
+#define to_custom_driver(d) container_of(d, struct custom_driver, driver);
 
-/**
-* @brief 
-*/
-
-/*
-struct custom_device {
-	struct module *owner;
-	unsigned char name[30];
-	unsigned long price;
-	struct device dev;
-};
-
-
-struct custom_driver {
-	int (*probe) (struct custom_device *dev);
-	int (*remove) (struct custom_device *dev);
-	void (*shutdown) (struct custom_device *dev);
-	struct device_driver driver;
-};
-*/
 
 static void custom_bus_release(struct device *dev)
 {
@@ -53,27 +33,47 @@ static int custom_hotplug(struct device *dev, char**envp, int num_envp, char *bu
 
 static int custom_match(struct device *dev, struct device_driver *driver)
 {
+	pr_info("%s, %s, %s\n", __func__, dev_name(dev), driver->name);
 	return !strncmp(dev_name(dev), driver->name, strlen(driver->name));
 }
 
 static int custom_probe(struct device *dev){
 
 	pr_info("Custom Bus Probe Called \n");
+	/* Once matched, struct device should have an instance of 
+	 * struct device_driver. That can be used to extract the custom_driver
+	 * and call the probe function. 
+	 */
+	struct custom_driver *cdriver = to_custom_driver(dev->driver);
+	struct custom_device *cdevice = to_custom_device(dev);
+	/* Let's call the driver probe function from dev->driver->probe() */
+	
+	
+	if (cdriver && cdriver->probe && cdriver->probe(cdevice)==0)
+		pr_info(" Custom Driver Probe Successful \n");
+	else
+		pr_err("Custom Driver Probe Failure\n");
 	return 0;
 }
 
-struct bus_type custom_bus_type = {
-	.name = "custom",
-	.match = custom_match,
-	.probe = custom_probe,
-//	.hotplug = custom_hotplug,
-};
-EXPORT_SYMBOL(custom_bus_type);
 
 struct device custom_bus_parent = {
 	.init_name = "custom0",
 	.release = custom_bus_release,
 };
+
+
+
+struct bus_type custom_bus_type = {
+        .name = "custom",
+        .match = custom_match,
+        .probe = custom_probe,
+//      .hotplug = custom_hotplug,
+};
+
+
+EXPORT_SYMBOL(custom_bus_type);
+
 
 int custom_register_driver(struct custom_driver *driver) 
 {
@@ -101,16 +101,14 @@ int custom_register_device(struct custom_device *dev)
 	dev->dev.bus = &custom_bus_type;
 	dev->dev.release = custom_dev_release;
 	pr_info("Register Custom Device %s", dev->name);
-//	strncpy(dev->dev.init_name, dev->name, strlen(dev->dev.init_name));
+	/* set the name in the struct device or else it will cause kernel panic */
 	dev_set_name(&dev->dev, dev->name);
-//	dev->dev.init_name = dev->name;
 	return device_register(&dev->dev);
 }
 EXPORT_SYMBOL(custom_register_device);
 
 void custom_unregister_device(struct custom_device *dev) 
 {
-//	BUG_ON(dev->dev==NULL);
 	pr_err("Unregister custom device %s\n", dev->name);
 	device_unregister(&dev->dev);
 }
@@ -143,11 +141,6 @@ static int __init custom_bus_init(void)
 	ret = bus_register(&custom_bus_type);
 	if (ret < 0)
 		goto err0;
-
-//	ret = class_register(&custom_master_class);
-//	if (ret < 0)
-//		goto err1;
-	
 	// register the parent device
 	ret = device_register(&custom_bus_parent);
 	if(ret <0){
@@ -177,7 +170,7 @@ static void  custom_bus_exit(void){
 
 	custom_unregister_device(&cus_dev);
 	pr_info("Now Unregister Custom Bus\n");
-	//	device_unregister(&custom_bus_parent);
+	device_unregister(&custom_bus_parent);
 	bus_unregister(&custom_bus_type);
 }
 

@@ -14,10 +14,12 @@ struct custom_driver {
         int (*remove) (struct custom_device *dev);
         void (*shutdown) (struct custom_device *dev);
         struct device_driver driver;
+	char id[30];
 };
 
-extern int custom_register_driver (struct custom_driver *driver);
-extern int custom_unregister_driver (struct custom_driver *driver);
+
+//extern int custom_register_driver (struct custom_driver *driver);
+//extern int custom_unregister_driver (struct custom_driver *driver);
 //extern int custom_register_device (struct custom_device *dev);
 //extern int custom_unregister_device (struct custom_device *dev);
 #endif
