@@ -16,7 +16,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 
-int main()
+int main(int argc, char **argv)
 {
 //------------------------------------------------------------------------------
 //Opening the DRI device
@@ -28,6 +28,9 @@ int main()
 		exit(-1);
 	}
 
+
+//int encoderID = atoi(argv[1]);
+//int encID = atoi(argv[2]);
 
 /* for ref
 
@@ -60,16 +63,23 @@ struct drm_mode_card_res {
 	//Become the "master" of the DRI device for
 	// KMS settings
 	
-	if(ioctl(dri_fd, DRM_IOCTL_SET_MASTER, 0) <0){
+	//if(ioctl(dri_fd, DRM_IOCTL_SET_MASTER, 0) <0){
+//		printf("DRM_IOCTL_SET_MASTER, ioctl failed and returned errno %s \n",strerror(errno));
+//	}
+
+	struct drm_auth auth;
+	if(ioctl(dri_fd, DRM_IOCTL_GET_MAGIC, &auth) <0){
 		printf("DRM_IOCTL_SET_MASTER, ioctl failed and returned errno %s \n",strerror(errno));
 	}
+	printf("Magic: %x\n", auth.magic);
+
 
 	//Get resource counts (connectors)
 	if(ioctl(dri_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) <0){
 		printf("DRM_IOCTL_MODE_GETRESOURCES 1, ioctl failed and returned errno %s \n",strerror(errno));
 	}
 	
-	printf("Res Count--> fb: %d, crtc: %d, conn: %d, enc: %d\n",res.count_fbs,res.count_crtcs,res.count_connectors,res.count_encoders);
+	printf("Total Resource Count-- fb: %d, crtc: %d, conn: %d, enc: %d\n\n",res.count_fbs,res.count_crtcs,res.count_connectors,res.count_encoders);
 
 	// pass in pointers as unsigned ints
 	res.fb_id_ptr=(uint64_t)res_fb_buf;
@@ -81,11 +91,18 @@ struct drm_mode_card_res {
 	if(ioctl(dri_fd, DRM_IOCTL_MODE_GETRESOURCES, &res) <0){
 		printf("DRM_IOCTL_MODE_GETRESOURCES 2, ioctl failed and returned errno %s \n",strerror(errno));
 	}
+
+	res_conn_buf[2]=201;
+
 	printf("Loop through all IDs\n");
-	for (int i=0;i<res.count_connectors;i++){
+	for (int i=0;i<10;i++){
 			printf("fb_id: %u, crtc_id: %u, conn_id: %u, encoder_id: %u\n",
 			res_fb_buf[i], res_crtc_buf[i],res_conn_buf[i], res_enc_buf[i]);
 	}
+
+
+	
+
 
 	void *fb_base[50]={NULL};
 	long fb_w[50];
@@ -139,32 +156,37 @@ struct drm_mode_modeinfo
 					conn_enc_buf[50]={0};
 
 		struct drm_mode_get_connector conn={0};
+		printf("\n crtc_id: %u, conn_id: %u, encoder_id: %u\n", res_crtc_buf[i],res_conn_buf[i], res_enc_buf[i]);
 
 		// for a single connector id get me all it's info
 		conn.connector_id=res_conn_buf[i];
+		conn.encoder_id=res_enc_buf[i];
+
 		
 		if (ioctl(dri_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) <0 ){ 
 			//get connector resource counts
 			printf("DRM_IOCTL_MODE_GETCONNECTOR 1, Expected: %u ConnID:%u\nioctl failed and returned errno %s \n",res_conn_buf[i], conn.connector_id, strerror(errno));
 			//continue;
 		}
-		printf("ModeCnt %u, EncCntPerConn :%u, IsConnected: %u\n", conn.count_modes, conn.count_encoders, conn.connection);
+	//	printf("ModeCnt %u, EncCntPerConn :%u, IsConnected: %u\n", conn.count_modes, conn.count_encoders, conn.connection);
 		conn.modes_ptr=(uint64_t)conn_mode_buf;
 		conn.props_ptr=(uint64_t)conn_prop_buf;
 		conn.prop_values_ptr=(uint64_t)conn_propval_buf;
 		conn.encoders_ptr=(uint64_t)conn_enc_buf;
+		//conn.encoder_id=res_enc_buf[i];
 		
 		if (ioctl(dri_fd, DRM_IOCTL_MODE_GETCONNECTOR, &conn) <0){
 			//get connector resources
 			printf("DRM_IOCTL_MODE_GETCONNECTOR 2, ConnID:%u\nioctl failed and returned errno %s \n",conn.connector_id, strerror(errno));
 		}	
-
+		conn.encoder_id=res_enc_buf[i];
 		//Check if the connector is OK to use (connected to something)
-		if (conn.count_encoders<1 || conn.count_modes<1 || !conn.encoder_id || !conn.connection)
+		if (res_conn_buf[i]!=201 || conn.count_encoders<1 || conn.count_modes<1 /*|| !conn.encoder_id*/ || !conn.connection)
 		{
-			//printf("Enc ID: %u, Connection: %u\nWidth: %u, Height: %u\n", conn.encoder_id, conn.connection, conn.mm_width, conn.mm_height);
+			printf("Count Encoders: %u, Count_Modes %u Encoder ID: %u,Connection: %u\n", conn.count_encoders, conn.count_modes, conn.encoder_id, conn.connection);
+			
 			printf("Not connected\n");
-			//continue;
+			continue;
 		}
 		
 		
@@ -178,10 +200,10 @@ struct drm_mode_modeinfo
 		//If we create the buffer later, we can get the size of the screen first.
 		//This must be a valid mode, so it's probably best to do this after we find
 		//a valid crtc with modes.
-		//create_dumb.width = conn_mode_buf[0].hdisplay;
-		//create_dumb.height = conn_mode_buf[0].vdisplay;
-		create_dumb.width = 3848;
-		create_dumb.height = 1924;
+		create_dumb.width = conn_mode_buf[0].hdisplay;
+		create_dumb.height = conn_mode_buf[0].vdisplay;
+		//create_dumb.width = 3848;
+		//create_dumb.height = 1924;
 		create_dumb.bpp = 32;
 		create_dumb.flags = 0;
 		create_dumb.pitch = 0;
@@ -214,29 +236,47 @@ struct drm_mode_modeinfo
 //Kernel Mode Setting (KMS)
 //------------------------------------------------------------------------------
 
-		printf("Connection:%d ---> : mode: %d, prop: %d, enc: %d\n",conn.connection,conn.count_modes,conn.count_props,conn.count_encoders);
-		//printf("modes: %dx%d FB: %x\n",conn_mode_buf[0].hdisplay,conn_mode_buf[0].vdisplay,fb_base[i]);
+//		printf("Connection:%d ---> : mode: %d, prop: %d, enc: %d\n",conn.connection,conn.count_modes,conn.count_props,conn.count_encoders);
+	//	printf("modes: %dx%d FB: %x\n",conn_mode_buf[0].hdisplay,conn_mode_buf[0].vdisplay,fb_base[i]);
+
+		if(conn.count_modes<=0)
+			continue;
+
+		for(int x=0; x < conn.count_modes; x++){
+			printf("modes: %dx%d\n",conn_mode_buf[x].hdisplay,conn_mode_buf[x].vdisplay);			
+		}
 
 		struct drm_mode_get_encoder enc={0};
 
 		enc.encoder_id=conn.encoder_id;
+		//enc.crtc_id = 88; //force hack
+		
 		if(ioctl(dri_fd, DRM_IOCTL_MODE_GETENCODER, &enc)<0){
-			//get encoder
 			printf("DRM_IOCTL_MODE_GETENCODER, ioctl failed and returned errno %s \n",strerror(errno));	
 
 		}
-
+		printf("Encoder Info:: EncID: %u, CrtcID: %u, FB_ID: %u\n", enc.encoder_id, enc.crtc_id, cmd_dumb.fb_id);
+		
+	//	enc.crtc_id = 88; //force hack
+		
 		struct drm_mode_crtc crtc={0};
-		crtc.crtc_id=enc.crtc_id;
+		crtc.crtc_id=197;
+		
 		
 		if(ioctl(dri_fd, DRM_IOCTL_MODE_GETCRTC, &crtc) <0){
 			printf("DRM_IOCTL_MODE_GETCRTC, ioctl failed and returned errno %s \n",strerror(errno));	
 		}
+
+		printf("CRTC INFO: ID: %u, fb_id:%u, mode_valid:%u\n", crtc.crtc_id, crtc.fb_id, crtc.mode_valid);
 		
-		crtc.fb_id=cmd_dumb.fb_id;
-		crtc.set_connectors_ptr=(uint64_t)&res_conn_buf[i];
+		crtc.crtc_id=197;
+		crtc.fb_id=211;
+		//crtc.fb_id=-1;
+		crtc.set_connectors_ptr=(uint64_t)&(res_conn_buf[i]);
 		crtc.count_connectors=1;
 		crtc.mode=conn_mode_buf[0];
+
+		//printf("ConnModeBuf : Name: %s\n", conn_mode_buf[0].name);
 		crtc.mode_valid=1;
 		if(ioctl(dri_fd, DRM_IOCTL_MODE_SETCRTC, &crtc) <0){
 			printf("DRM_IOCTL_MODE_SETCRTC, ioctl failed and returned errno %s \n",strerror(errno));	
@@ -250,10 +290,11 @@ struct drm_mode_modeinfo
 
 	
 	for (int i=0;i<500;i++){
-		
+		int foundfb=0;
 		for (int j=0;j<res.count_connectors;j++){
 			if(fb_base[j]==NULL)
-				continue;	
+				continue;
+			
 			int col=(rand()%0x00ffffff)&0x00eeeeee;
 			for (int height=0; height < fb_h[j]; height++)
 				for (int width=0; width < fb_w[j]; width++){
@@ -266,3 +307,18 @@ struct drm_mode_modeinfo
 
 	return 0;
 }
+
+
+/*
+
+struct drm_mode_get_encoder {
+	__u32 encoder_id;
+	__u32 encoder_type;
+
+	__u32 crtc_id; // Id of crtc
+
+	__u32 possible_crtcs;
+	__u32 possible_clones;
+}
+
+*/
